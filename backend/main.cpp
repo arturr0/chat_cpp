@@ -4,6 +4,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/filesystem.hpp>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <set>
@@ -55,6 +56,12 @@ public:
     }
 };
 
+// --- Helper: ends_with for C++17 ---
+bool ends_with(const std::string &str, const std::string &suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 // --- HTTP session for static files ---
 void handle_http(tcp::socket socket) {
     try {
@@ -80,9 +87,9 @@ void handle_http(tcp::socket socket) {
                           std::istreambuf_iterator<char>());
 
         http::response<http::string_body> res{http::status::ok, 11};
-        if(path.ends_with(".html")) res.set(http::field::content_type, "text/html");
-        else if(path.ends_with(".js")) res.set(http::field::content_type, "application/javascript");
-        else if(path.ends_with(".css")) res.set(http::field::content_type, "text/css");
+        if(ends_with(path,".html")) res.set(http::field::content_type, "text/html");
+        else if(ends_with(path,".js")) res.set(http::field::content_type, "application/javascript");
+        else if(ends_with(path,".css")) res.set(http::field::content_type, "text/css");
         else res.set(http::field::content_type, "text/plain");
 
         res.body() = body;
@@ -91,28 +98,41 @@ void handle_http(tcp::socket socket) {
     } catch(...) {}
 }
 
+// --- Accept incoming connections ---
+void accept_connections(tcp::acceptor& acceptor,
+                        std::shared_ptr<std::set<std::shared_ptr<WsSession>>> sessions,
+                        asio::io_context& ioc) {
+    acceptor.async_accept([&](beast::error_code ec, tcp::socket socket){
+        if(!ec){
+            // Jeśli pierwszy bajt to 'G', traktujemy jako HTTP GET
+            socket.async_wait(tcp::socket::wait_read, [&](beast::error_code ec2){
+                if(!ec2){
+                    char peek[1];
+                    beast::error_code ec3;
+                    size_t n = socket.read_some(asio::buffer(peek), ec3);
+                    if(n>0 && peek[0]=='G'){
+                        std::thread(handle_http, std::move(socket)).detach();
+                    } else {
+                        std::make_shared<WsSession>(std::move(socket), sessions)->start();
+                    }
+                }
+            });
+        }
+        accept_connections(acceptor, sessions, ioc);
+    });
+}
+
 int main() {
     try {
         asio::io_context ioc{1};
         tcp::acceptor acceptor{ioc, {tcp::v4(), 9001}};
-
         auto sessions = std::make_shared<std::set<std::shared_ptr<WsSession>>>();
 
         std::cout << "Server running on port 9001\n";
 
-        while(true){
-            tcp::socket socket{ioc};
-            acceptor.accept(socket);
+        accept_connections(acceptor, sessions, ioc);
+        ioc.run();
 
-            // Peek first bytes to see if WebSocket upgrade
-            char data[2];
-            socket.peek(asio::buffer(data,2));
-            if(data[0] == 'G' || data[0]=='P'){ // HTTP GET / upgrade
-                std::thread(handle_http, std::move(socket)).detach();
-            } else {
-                std::make_shared<WsSession>(std::move(socket), sessions)->start();
-            }
-        }
     } catch(std::exception& e){
         std::cerr << "Error: " << e.what() << "\n";
     }
