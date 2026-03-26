@@ -4,3 +4,9 @@ project(chat_server)
 set(CMAKE_CXX_STANDARD 17)
 
 add_executable(server main.cpp)
+
+# 👇 include uWebSockets
+target_include_directories(server PRIVATE uWebSockets/src)
+
+# 👇 linkowanie (minimum)
+target_link_libraries(server PRIVATE ssl crypto z)
