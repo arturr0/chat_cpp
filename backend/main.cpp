@@ -20,15 +20,22 @@ using tcp = net::ip::tcp;
 std::set<websocket::stream<tcp::socket>*> clients;
 std::mutex clients_mutex;
 
+// 🔧 funkcja do sprawdzenia końcówki stringa (C++17)
+bool ends_with(const std::string& str, const std::string& suffix) {
+    if (str.size() < suffix.size()) return false;
+    return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 // 🔧 czytanie pliku
 std::string read_file(const std::string& path) {
-    std::ifstream file(path);
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return "";
     std::stringstream buffer;
     buffer << file.rdbuf();
     return buffer.str();
 }
 
-// 🔥 broadcast
+// 🔥 broadcast do wszystkich klientów
 void broadcast(const std::string& message) {
     std::lock_guard<std::mutex> lock(clients_mutex);
     for (auto* client : clients) {
@@ -71,7 +78,6 @@ void handle_client(tcp::socket socket) {
         } else {
             // 🌐 STATIC FILES
             std::string target = std::string(req.target());
-
             if (target == "/") target = "/index.html";
 
             std::string path = "." + target;
@@ -91,10 +97,10 @@ void handle_client(tcp::socket socket) {
                 http::status::ok, req.version()
             };
 
-            // 🔥 content-type
-            if (target.ends_with(".html")) res.set(http::field::content_type, "text/html");
-            else if (target.ends_with(".js")) res.set(http::field::content_type, "application/javascript");
-            else if (target.ends_with(".css")) res.set(http::field::content_type, "text/css");
+            // 🔥 ustawienie content-type
+            if (ends_with(target, ".html")) res.set(http::field::content_type, "text/html");
+            else if (ends_with(target, ".js")) res.set(http::field::content_type, "application/javascript");
+            else if (ends_with(target, ".css")) res.set(http::field::content_type, "text/css");
 
             res.body() = body;
             res.prepare_payload();
@@ -115,7 +121,7 @@ int main() {
         }
 
         net::io_context ioc{1};
-        tcp::acceptor acceptor{ioc, {tcp::v4(), (unsigned short)port}};
+        tcp::acceptor acceptor{ioc, {tcp::v4(), static_cast<unsigned short>(port)}};
 
         std::cout << "Server running on port " << port << "\n";
 
