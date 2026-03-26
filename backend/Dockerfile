@@ -1,6 +1,6 @@
-# backend/Dockerfile
 FROM ubuntu:22.04
 
+# Instalacja narzędzi do kompilacji i Boost
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -13,13 +13,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Kopiujemy backend
+# Kopiujemy cały backend razem z frontend
 COPY . .
-
-# Kopiujemy frontend z katalogu nadrzędnego
-COPY ../frontend ./frontend
 
 # Build
 RUN cmake -S . -B build && cmake --build build
 
+# Uruchomienie serwera
 CMD ["./build/server"]
