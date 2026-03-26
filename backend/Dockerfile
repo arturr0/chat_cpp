@@ -1,6 +1,6 @@
 FROM ubuntu:22.04
 
-# Narzędzia do builda
+# Build tools
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -14,13 +14,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Pobieramy i instalujemy uWebSockets
-RUN git clone https://github.com/uNetworking/uWebSockets.git /uwebsockets && \
-    cd /uwebsockets && \
-    mkdir build && cd build && \
-    cmake .. && make install
+# Pobieramy uWebSockets v20
+RUN git clone -b v20.4.0 --single-branch https://github.com/uNetworking/uWebSockets.git /uwebsockets && \
+    cd /uwebsockets && mkdir build && cd build && cmake .. && make install
 
-# Kopiujemy backend (wraz z frontend w tym samym folderze)
+# Kopiujemy backend i frontend (frontend w tym samym folderze)
 COPY . .
 
 # Build projektu
