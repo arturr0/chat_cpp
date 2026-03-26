@@ -1,118 +1,52 @@
-#include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
-#include <boost/beast/http.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <iostream>
-#include <thread>
-#include <set>
-#include <mutex>
+#include <uwebsockets/App.h>
 #include <fstream>
+#include <iostream>
+#include <string>
 #include <sstream>
-#include <cstdlib>
 
-namespace beast = boost::beast;
-namespace websocket = beast::websocket;
-namespace http = beast::http;
-namespace net = boost::asio;
-using tcp = net::ip::tcp;
-
-std::set<websocket::stream<tcp::socket>*> clients;
-std::mutex clients_mutex;
-
-bool ends_with(const std::string& str, const std::string& suffix) {
-    if (str.size() < suffix.size()) return false;
-    return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-std::string read_file(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) return "";
+std::string readFile(const std::string& path) {
+    std::ifstream t(path);
     std::stringstream buffer;
-    buffer << file.rdbuf();
+    buffer << t.rdbuf();
     return buffer.str();
 }
 
-void broadcast(const std::string& message) {
-    std::lock_guard<std::mutex> lock(clients_mutex);
-    for (auto* client : clients) {
-        try {
-            client->text(true);
-            client->write(net::buffer(message));
-        } catch (...) {}
-    }
-}
-
-void handle_client(tcp::socket socket) {
-    try {
-        beast::flat_buffer buffer;
-        http::request<http::string_body> req;
-        http::read(socket, buffer, req);
-
-        if (websocket::is_upgrade(req)) {
-            auto ws = new websocket::stream<tcp::socket>(std::move(socket));
-            ws->accept(req);
-
-            {
-                std::lock_guard<std::mutex> lock(clients_mutex);
-                clients.insert(ws);
-            }
-
-            std::cout << "Client connected\n";
-
-            while (true) {
-                beast::flat_buffer buffer;
-                ws->read(buffer);
-                std::string msg = beast::buffers_to_string(buffer.data());
-                broadcast(msg);
-            }
-
-        } else {
-            // 🔥 Serwujemy frontend z folderu /frontend
-            std::string target = std::string(req.target());
-            if (target == "/") target = "/index.html";
-
-            std::string path = "./frontend" + target;
-            std::string body = read_file(path);
-
-            http::response<http::string_body> res{
-                body.empty() ? http::status::not_found : http::status::ok,
-                req.version()
-            };
-
-            if (body.empty()) {
-                res.body() = "404 Not Found";
-            } else {
-                if (ends_with(target, ".html")) res.set(http::field::content_type, "text/html");
-                else if (ends_with(target, ".js")) res.set(http::field::content_type, "application/javascript");
-                else if (ends_with(target, ".css")) res.set(http::field::content_type, "text/css");
-                res.body() = body;
-            }
-            res.prepare_payload();
-            http::write(socket, res);
-        }
-
-    } catch (...) {
-        std::cout << "Client disconnected\n";
-    }
-}
-
 int main() {
-    try {
-        int port = 9001;
-        if (const char* env_p = std::getenv("PORT")) port = std::stoi(env_p);
+    uWS::App().get("/*", [](auto *res, auto *req) {
+        std::string url = req->getUrl().toString();
+        if (url == "/") url = "/index.html";
 
-        net::io_context ioc{1};
-        tcp::acceptor acceptor{ioc, {tcp::v4(), static_cast<unsigned short>(port)}};
-
-        std::cout << "Server running on port " << port << "\n";
-
-        while (true) {
-            tcp::socket socket{ioc};
-            acceptor.accept(socket);
-            std::thread{handle_client, std::move(socket)}.detach();
+        std::string path = "." + url; // teraz frontend jest w tym samym folderze
+        std::ifstream f(path);
+        if (!f.is_open()) {
+            res->writeStatus("404 Not Found")->end("File not found");
+            return;
         }
 
-    } catch (std::exception const& e) {
-        std::cerr << "Error: " << e.what() << "\n";
-    }
+        std::string content = readFile(path);
+        // typ content-type na podstawie rozszerzenia
+        if (url.size() >= 5 && url.substr(url.size()-5) == ".html") res->writeHeader("Content-Type", "text/html");
+        else if (url.size() >= 3 && url.substr(url.size()-3) == ".js") res->writeHeader("Content-Type", "application/javascript");
+        else if (url.size() >= 4 && url.substr(url.size()-4) == ".css") res->writeHeader("Content-Type", "text/css");
+        else res->writeHeader("Content-Type", "text/plain");
+
+        res->end(content);
+    })
+    .ws("/*", {
+        .open = [](auto* ws) {
+            std::cout << "Client connected\n";
+        },
+        .message = [](auto* ws, std::string_view message, uWS::OpCode opCode) {
+            ws->publish("chat", message, opCode);
+        },
+        .close = [](auto* ws, int code, std::string_view msg) {
+            std::cout << "Client disconnected\n";
+        }
+    })
+    .listen(9001, [](auto *token){
+        if (token) {
+            std::cout << "Server running on port 9001\n";
+        }
+    })
+    .run();
 }
