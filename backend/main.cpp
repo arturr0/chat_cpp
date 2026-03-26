@@ -1,139 +1,114 @@
-#include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
 #include <boost/asio.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/filesystem.hpp>
+#include <boost/beast.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/beast/http.hpp>
 #include <iostream>
 #include <fstream>
-#include <memory>
 #include <string>
+#include <memory>
 #include <set>
-#include <thread>
+#include <mutex>
 
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace websocket = beast::websocket;
 namespace asio = boost::asio;
-using tcp = asio::ip::tcp;
+namespace http = boost::beast::http;
+namespace websocket = boost::beast::websocket;
+using tcp = boost::asio::ip::tcp;
 
-// --- WebSocket session ---
-class WsSession : public std::enable_shared_from_this<WsSession> {
-    websocket::stream<tcp::socket> ws_;
-    std::shared_ptr<std::set<std::shared_ptr<WsSession>>> sessions_;
-    beast::flat_buffer buffer_;
+std::mutex g_mutex;
+std::set<std::shared_ptr<websocket::stream<tcp::socket>>> g_clients;
 
-public:
-    WsSession(tcp::socket socket,
-              std::shared_ptr<std::set<std::shared_ptr<WsSession>>> sessions)
-        : ws_(std::move(socket)), sessions_(sessions) {}
-
-    void start() {
-        ws_.async_accept([self=shared_from_this()](beast::error_code ec){
-            if(!ec){
-                self->sessions_->insert(self);
-                self->do_read();
-            }
-        });
-    }
-
-    void do_read() {
-        ws_.async_read(buffer_, [self=shared_from_this()](beast::error_code ec, std::size_t){
-            if(ec){
-                self->sessions_->erase(self);
-                return;
-            }
-            std::string msg = beast::buffers_to_string(self->buffer_.data());
-
-            // Broadcast to all sessions
-            for(auto& s : *self->sessions_){
-                s->ws_.text(true);
-                s->ws_.async_write(asio::buffer(msg),
-                    [](beast::error_code, std::size_t){});
-            }
-            self->buffer_.consume(self->buffer_.size());
-            self->do_read();
-        });
-    }
-};
-
-// --- Helper: ends_with for C++17 ---
-bool ends_with(const std::string &str, const std::string &suffix) {
-    return str.size() >= suffix.size() &&
-           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+// Funkcja do wykrywania typu MIME
+std::string mime_type(const std::string& path) {
+    if(path.size() >= 5 && path.substr(path.size()-5) == ".html") return "text/html";
+    if(path.size() >= 3 && path.substr(path.size()-3) == ".js") return "application/javascript";
+    if(path.size() >= 4 && path.substr(path.size()-4) == ".css") return "text/css";
+    return "text/plain";
 }
 
-// --- HTTP session for static files ---
-void handle_http(tcp::socket socket) {
+// Funkcja do wczytania pliku
+std::string load_file(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if(!file) return "File not found";
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    return content;
+}
+
+// Obsługa jednego klienta HTTP/WebSocket
+void handle_session(tcp::socket socket) {
     try {
-        beast::flat_buffer buffer;
+        boost::beast::flat_buffer buffer;
         http::request<http::string_body> req;
         http::read(socket, buffer, req);
 
-        std::string target = req.target().to_string();
-        if(target == "/") target = "/index.html";
+        // Jeśli to WebSocket
+        if(websocket::is_upgrade(req)) {
+            auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+            ws->accept(req);
 
-        std::string path = "frontend" + target;
-        if(!boost::filesystem::exists(path)){
-            http::response<http::string_body> res{http::status::not_found, 11};
-            res.set(http::field::content_type, "text/plain");
-            res.body() = "Not Found";
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                g_clients.insert(ws);
+            }
+
+            // Pętla odbierania wiadomości
+            while(true) {
+                boost::beast::flat_buffer msg_buffer;
+                ws->read(msg_buffer);
+                std::string message = boost::beast::buffers_to_string(msg_buffer.data());
+
+                // Wysyłanie do wszystkich klientów
+                std::lock_guard<std::mutex> lock(g_mutex);
+                for(auto& client : g_clients) {
+                    if(client != ws)
+                        client->write(boost::asio::buffer(message));
+                }
+            }
+        } else {
+            // HTTP GET – serwujemy pliki statyczne z folderu frontend
+            std::string target = req.target().to_string();
+            if(target == "/") target = "/index.html";
+
+            std::string body = load_file("frontend" + target);
+
+            http::response<http::string_body> res{http::status::ok, req.version()};
+            res.set(http::field::server, "C++ Chat Server");
+            res.set(http::field::content_type, mime_type(target));
+            res.body() = body;
             res.prepare_payload();
             http::write(socket, res);
-            return;
         }
-
-        std::ifstream file(path, std::ios::binary);
-        std::string body((std::istreambuf_iterator<char>(file)),
-                          std::istreambuf_iterator<char>());
-
-        http::response<http::string_body> res{http::status::ok, 11};
-        if(ends_with(path,".html")) res.set(http::field::content_type, "text/html");
-        else if(ends_with(path,".js")) res.set(http::field::content_type, "application/javascript");
-        else if(ends_with(path,".css")) res.set(http::field::content_type, "text/css");
-        else res.set(http::field::content_type, "text/plain");
-
-        res.body() = body;
-        res.prepare_payload();
-        http::write(socket, res);
-    } catch(...) {}
-}
-
-// --- Accept incoming connections ---
-void accept_connections(tcp::acceptor& acceptor,
-                        std::shared_ptr<std::set<std::shared_ptr<WsSession>>> sessions,
-                        asio::io_context& ioc) {
-    acceptor.async_accept([&](beast::error_code ec, tcp::socket socket){
-        if(!ec){
-            // Jeśli pierwszy bajt to 'G', traktujemy jako HTTP GET
-            socket.async_wait(tcp::socket::wait_read, [&](beast::error_code ec2){
-                if(!ec2){
-                    char peek[1];
-                    beast::error_code ec3;
-                    size_t n = socket.read_some(asio::buffer(peek), ec3);
-                    if(n>0 && peek[0]=='G'){
-                        std::thread(handle_http, std::move(socket)).detach();
-                    } else {
-                        std::make_shared<WsSession>(std::move(socket), sessions)->start();
-                    }
-                }
-            });
+    } catch(std::exception& e) {
+        // Jeśli klient się rozłączy, usuwamy z listy
+        std::lock_guard<std::mutex> lock(g_mutex);
+        for(auto it = g_clients.begin(); it != g_clients.end(); ) {
+            if(it->get()->next_layer().socket().is_open())
+                ++it;
+            else
+                it = g_clients.erase(it);
         }
-        accept_connections(acceptor, sessions, ioc);
-    });
+    }
 }
 
 int main() {
     try {
         asio::io_context ioc{1};
-        tcp::acceptor acceptor{ioc, {tcp::v4(), 9001}};
-        auto sessions = std::make_shared<std::set<std::shared_ptr<WsSession>>>();
 
-        std::cout << "Server running on port 9001\n";
+        // Port z Render lub 9001 lokalnie
+        const char* port_env = std::getenv("PORT");
+        unsigned short port = port_env ? static_cast<unsigned short>(std::stoi(port_env)) : 9001;
 
-        accept_connections(acceptor, sessions, ioc);
-        ioc.run();
+        tcp::acceptor acceptor{ioc, {tcp::v4(), port}};
 
-    } catch(std::exception& e){
-        std::cerr << "Error: " << e.what() << "\n";
+        std::cout << "Server running on port " << port << "\n";
+
+        while(true) {
+            tcp::socket socket{ioc};
+            acceptor.accept(socket);
+            std::thread(handle_session, std::move(socket)).detach();
+        }
+
+    } catch(std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << "\n";
     }
 }
