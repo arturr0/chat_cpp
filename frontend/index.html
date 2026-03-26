@@ -1,16 +1,22 @@
 <!DOCTYPE html>
-<html>
+<html lang="pl">
 <head>
   <meta charset="UTF-8">
-  <title>Chat</title>
+  <title>C++ Chat</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div id="chat"></div>
+<div id="container">
+  <h2>💬 Chat</h2>
 
-<input id="msg" placeholder="Type message..." />
-<button onclick="send()">Send</button>
+  <div id="chat"></div>
+
+  <div id="inputBox">
+    <input id="msg" placeholder="Napisz wiadomość..." />
+    <button onclick="send()">Wyślij</button>
+  </div>
+</div>
 
 <script src="script.js"></script>
 </body>
