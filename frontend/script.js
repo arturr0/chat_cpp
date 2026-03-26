@@ -1,4 +1,4 @@
-const ws = new WebSocket("ws://chat_cpp.onrender.com");
+const ws = new WebSocket("ws://chat-cpp.onrender.com");
 
 const chat = document.getElementById("chat");
 
