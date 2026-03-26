@@ -3,10 +3,11 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
-    libboost-dev
+    git \
+    libssl-dev \
+    libboost-all-dev
 
 WORKDIR /app
-
 COPY . .
 
 RUN cmake -S . -B build && cmake --build build
