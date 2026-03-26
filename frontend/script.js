@@ -1,4 +1,4 @@
-const ws = new WebSocket("ws://chat-cpp.onrender.com");
+const ws = new WebSocket("wss://" + window.location.host);
 
 const chat = document.getElementById("chat");
 
@@ -10,6 +10,7 @@ ws.onmessage = (event) => {
 
 function send() {
     const input = document.getElementById("msg");
+    if (input.value.trim() === "") return;
     ws.send(input.value);
     input.value = "";
 }
