@@ -16,25 +16,25 @@ void handle_client(tcp::socket socket) {
     try {
         beast::flat_buffer buffer;
 
-        // 👇 Odczyt request HTTP
         http::request<http::string_body> req;
         http::read(socket, buffer, req);
 
-        // 👇 Sprawdź czy to WebSocket upgrade
+        // ✅ jeśli NIE websocket → zwróć HTTP 200
         if (!websocket::is_upgrade(req)) {
-            std::cout << "Not a WebSocket request\n";
+            http::response<http::string_body> res{
+                http::status::ok, req.version()
+            };
+
+            res.set(http::field::server, "C++ Server");
+            res.set(http::field::content_type, "text/plain");
+            res.body() = "Server is running";
+            res.prepare_payload();
+
+            http::write(socket, res);
             return;
         }
 
         websocket::stream<tcp::socket> ws(std::move(socket));
-
-        // 👇 kluczowe dla Render (proxy compatibility)
-        ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
-        ws.set_option(websocket::stream_base::decorator(
-            [](websocket::response_type& res) {
-                res.set(http::field::server, "C++ Chat Server");
-            }
-        ));
 
         ws.accept(req);
 
