@@ -4,12 +4,18 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
-    libssl-dev
+    libssl-dev \
+    zlib1g-dev
 
 WORKDIR /app
 
+# 👇 pobierz uWebSockets
+RUN git clone https://github.com/uNetworking/uWebSockets.git
+
+# 👇 skopiuj Twój kod
 COPY . .
 
-RUN cmake . && make
+# 👇 build
+RUN cmake -S . -B build && cmake --build build
 
-CMD ["./server"]
+CMD ["./build/server"]
