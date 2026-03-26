@@ -1,7 +1,5 @@
 // 🔥 automatyczne dopasowanie ws/wss
-const ws = new WebSocket(
-  (location.protocol === "https:" ? "wss://" : "ws://") + location.host
-);
+const ws = new WebSocket("wss://chat-cpp.onrender.com");
 
 const chat = document.getElementById("chat");
 const input = document.getElementById("msg");
