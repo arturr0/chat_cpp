@@ -16,17 +16,14 @@ namespace http = beast::http;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-// 🔥 globalna lista klientów
 std::set<websocket::stream<tcp::socket>*> clients;
 std::mutex clients_mutex;
 
-// 🔧 funkcja do sprawdzenia końcówki stringa (C++17)
 bool ends_with(const std::string& str, const std::string& suffix) {
     if (str.size() < suffix.size()) return false;
     return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// 🔧 czytanie pliku
 std::string read_file(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) return "";
@@ -35,7 +32,6 @@ std::string read_file(const std::string& path) {
     return buffer.str();
 }
 
-// 🔥 broadcast do wszystkich klientów
 void broadcast(const std::string& message) {
     std::lock_guard<std::mutex> lock(clients_mutex);
     for (auto* client : clients) {
@@ -52,9 +48,7 @@ void handle_client(tcp::socket socket) {
         http::request<http::string_body> req;
         http::read(socket, buffer, req);
 
-        // 🔥 WEBSOCKET
         if (websocket::is_upgrade(req)) {
-
             auto ws = new websocket::stream<tcp::socket>(std::move(socket));
             ws->accept(req);
 
@@ -68,47 +62,36 @@ void handle_client(tcp::socket socket) {
             while (true) {
                 beast::flat_buffer buffer;
                 ws->read(buffer);
-
                 std::string msg = beast::buffers_to_string(buffer.data());
-                std::cout << "Msg: " << msg << "\n";
-
                 broadcast(msg);
             }
 
         } else {
-            // 🌐 STATIC FILES
+            // 🔥 Serwujemy frontend z folderu /frontend
             std::string target = std::string(req.target());
             if (target == "/") target = "/index.html";
 
-            std::string path = "." + target;
+            std::string path = "./frontend" + target;
             std::string body = read_file(path);
 
-            if (body.empty()) {
-                http::response<http::string_body> res{
-                    http::status::not_found, req.version()
-                };
-                res.body() = "404 Not Found";
-                res.prepare_payload();
-                http::write(socket, res);
-                return;
-            }
-
             http::response<http::string_body> res{
-                http::status::ok, req.version()
+                body.empty() ? http::status::not_found : http::status::ok,
+                req.version()
             };
 
-            // 🔥 ustawienie content-type
-            if (ends_with(target, ".html")) res.set(http::field::content_type, "text/html");
-            else if (ends_with(target, ".js")) res.set(http::field::content_type, "application/javascript");
-            else if (ends_with(target, ".css")) res.set(http::field::content_type, "text/css");
-
-            res.body() = body;
+            if (body.empty()) {
+                res.body() = "404 Not Found";
+            } else {
+                if (ends_with(target, ".html")) res.set(http::field::content_type, "text/html");
+                else if (ends_with(target, ".js")) res.set(http::field::content_type, "application/javascript");
+                else if (ends_with(target, ".css")) res.set(http::field::content_type, "text/css");
+                res.body() = body;
+            }
             res.prepare_payload();
-
             http::write(socket, res);
         }
 
-    } catch (std::exception const& e) {
+    } catch (...) {
         std::cout << "Client disconnected\n";
     }
 }
@@ -116,9 +99,7 @@ void handle_client(tcp::socket socket) {
 int main() {
     try {
         int port = 9001;
-        if (const char* env_p = std::getenv("PORT")) {
-            port = std::stoi(env_p);
-        }
+        if (const char* env_p = std::getenv("PORT")) port = std::stoi(env_p);
 
         net::io_context ioc{1};
         tcp::acceptor acceptor{ioc, {tcp::v4(), static_cast<unsigned short>(port)}};
@@ -128,7 +109,6 @@ int main() {
         while (true) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
-
             std::thread{handle_client, std::move(socket)}.detach();
         }
 
